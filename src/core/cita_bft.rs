@@ -33,7 +33,7 @@ use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
 use libproto::{auth, Message};
 use libproto::{TryFrom, TryInto};
-use proof::BftProof;
+use proof::{BftProof, BftProposalMsg};
 use pubsub::channel::{Receiver, Sender};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
@@ -112,6 +112,12 @@ pub enum Step {
     PrecommitWait = 6,
     Commit = 7,
     CommitWait = 8,
+}
+
+impl Step {
+    pub fn u8_value(self) -> u8 {
+        self as u8
+    }
 }
 
 impl Default for Step {
@@ -805,7 +811,14 @@ impl Bft {
         hash: Option<H256>,
     ) {
         let author = &self.params.signer;
-        let msg = serialize(&(height, round, step, author.address, hash), Infinite).unwrap();
+        let msg = BftProposalMsg {
+            height,
+            round,
+            step: step.u8_value().into(),
+            author: author.address,
+            proposal: hash
+        };
+        let msg: Vec<u8> = rlp::encode(&msg).to_vec();
         let signature = Signature::sign(author.keypair.privkey(), &msg.crypt_hash()).unwrap();
         let sig = signature.clone();
         let msg = serialize(&(msg, sig), Infinite).unwrap();
@@ -885,8 +898,9 @@ impl Bft {
             }
             let signature = Signature::from(signature);
             if let Ok(pubkey) = signature.recover(&message.crypt_hash()) {
-                let decoded = deserialize(&message[..]).unwrap();
-                let (h, r, step, sender, hash) = decoded;
+                let decoded: BftProposalMsg = rlp::decode(message.as_slice());
+                let (h, r, step, sender, hash) = decoded.values();
+                let step = Step::from(step.into_u8());
                 trace!(
                     "handle_message {} parse over h: {}, r: {}, s: {}, sender: {:?}",
                     self,
